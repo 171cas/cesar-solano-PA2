@@ -3,6 +3,7 @@
 const net = require('net');
 const path = require('path');
 const { Worker } = require('worker_threads');
+const createGameSession = require('./game-session');
 
 const args = process.argv.slice(2);
 
@@ -28,9 +29,9 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 // Resolve the worker relative to this file, even if the server is launched elsewhere.
 const workerFile = path.join(__dirname, 'server-worker.js');
 
-// Only the main thread owns sockets and shared state. Each client worker handles
-// its own input and sends parsed lines here instead of changing this map directly.
-// Keeping shared changes together prevents two workers from claiming the same name.
+// The main thread maps registered usernames to their sockets for message delivery.
+// Workers send parsed lines here; checking and claiming names together prevents
+// duplicate registration. game-session.js separately owns membership and readiness.
 const registeredUsers = new Map();
 
 // Track every socket, including clients who have not registered, for server shutdown.
@@ -51,6 +52,18 @@ function broadcast(text) {
     sendLine(registeredSocket, text);
   }
 }
+
+// Create one session on the main thread. It sends messages by username through
+// these functions, keeping sockets and worker details out of the game rules.
+const game = createGameSession({
+  sendToPlayer(name, text) {
+    const socket = registeredUsers.get(name);
+    if (socket !== undefined) {
+      sendLine(socket, text);
+    }
+  },
+  broadcast,
+});
 
 // Keep the outgoing side open after a client finishes sending. Its worker may still
 // be processing the final input, so closing immediately could discard complete lines.
@@ -79,25 +92,22 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
   let worker;
   // Save the ID while the worker is alive; worker.threadId becomes -1 after exit.
   let workerId;
-  // Once cleanup begins, ignore any worker replies that were already on their way.
+  // One flag prevents repeated cleanup and rejects late worker replies. Several
+  // socket or worker events can report the same departure, but it is handled once.
   let closing = false;
-  // Cleanup can be reached through Bye, a socket event, or a worker failure.
-  let cleanedUp = false;
 
-  // Remove this client and stop its worker exactly once; polite means it sent Bye.
+  // Remove this client and stop its worker exactly once; polite means it sent quit.
   function cleanup(polite = false) {
-    if (cleanedUp) {
+    if (closing) {
       return;
     }
-    cleanedUp = true;
     closing = true;
 
-    // Remove the username only if it still belongs to this socket.
+    // Remove only the name owned by this connection, then let the session update
+    // readiness and game membership. Late events must not remove a reused name.
     if (username !== undefined && registeredUsers.get(username) === socket) {
       registeredUsers.delete(username);
-      broadcast(polite
-        ? `Server: Goodbye ${username}`
-        : `Server: ${username} disconnected`);
+      game.removePlayer(username, polite);
     }
 
     // Termination also discards unfinished input held by this client's worker.
@@ -119,54 +129,10 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     socket.destroy();
   }
 
-  // Apply a worker's parsed line to the registry on the main thread. This function
-  // has no asynchronous pause, so each shared-state change finishes before the next.
-  function handleLine(message) {
-    const { line, validUsername, messageTooLong } = message;
-
-    // After registration, treat input as a command or chat message.
-    if (username !== undefined) {
-      console.log(`Client line (${endpoint}, thread ${workerId}): ${line}`);
-      // Ignore chat lines that are empty after removing surrounding spaces and tabs.
-      if (line === '') {
-        return;
-      }
-
-      if (line === 'AllUsers') {
-        // Sort registered names by ASCII order, then reply only to this client.
-        const names = Array.from(registeredUsers.keys());
-        names.sort();
-        sendLine(socket, `Server: Active users: ${names.join(', ')}`);
-        return;
-      }
-
-      // Reject extra arguments without broadcasting the malformed command.
-      if (/^AllUsers[ \t]/.test(line)) {
-        sendLine(socket, 'Server: Invalid command. Use AllUsers alone.');
-        return;
-      }
-
-      if (line === 'Bye') {
-        cleanup(true);
-        socket.end();
-        // Later worker replies, including other lines in this chunk, are ignored.
-        return;
-      }
-
-      if (/^Bye[ \t]/.test(line)) {
-        sendLine(socket, 'Server: Invalid command. Use Bye alone.');
-        return;
-      }
-
-      // The worker already counted Unicode code points, excluding the sender prefix.
-      if (messageTooLong) {
-        sendLine(socket, 'Server: Message too long.');
-        return;
-      }
-
-      broadcast(`${username}: ${line}`);
-      return;
-    }
+  // Register this connection on the main thread, where checking and claiming a
+  // username happen together. Rejected attempts leave the connection open to retry.
+  function handleRegistration(message) {
+    const { line, validUsername } = message;
 
     // The worker checked for 3-16 ASCII letters, digits, underscores, or hyphens.
     // Invalid names get a private error and another chance to register.
@@ -186,10 +152,74 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     }
 
     // Save the name and socket before broadcasting so the new user receives it too.
+    // New lobby members begin unready; existing players keep their readiness.
     username = line;
     registeredUsers.set(username, socket);
     console.log(`User registered: ${username} from ${endpoint}`);
-    broadcast(`Server: Welcome ${username}`);
+    game.addPlayer(username);
+  }
+
+  // Route a parsed line to registration or the registered client's commands.
+  // These handlers have no asynchronous pause, so shared changes finish in order.
+  function handleLine(message) {
+    if (username === undefined) {
+      handleRegistration(message);
+      return;
+    }
+
+    const { line, messageTooLong } = message;
+    console.log(`Client line (${endpoint}, thread ${workerId}): ${line}`);
+    // Ignore chat lines that are empty after removing surrounding spaces and tabs.
+    if (line === '') {
+      return;
+    }
+
+    if (line === 'AllUsers') {
+      // Sort registered names by ASCII order, then reply only to this client.
+      const names = Array.from(registeredUsers.keys());
+      names.sort();
+      sendLine(socket, `Server: Active users: ${names.join(', ')}`);
+      return;
+    }
+
+    // Reject extra arguments without broadcasting the malformed command.
+    if (/^AllUsers[ \t]/.test(line)) {
+      sendLine(socket, 'Server: Invalid command. Use AllUsers alone.');
+      return;
+    }
+
+    if (line === 'quit') {
+      cleanup(true);
+      socket.end();
+      // Later worker replies, including other lines in this chunk, are ignored.
+      return;
+    }
+
+    if (/^quit[ \t]/.test(line)) {
+      sendLine(socket, 'Server: Invalid command. Use quit alone.');
+      return;
+    }
+
+    if (line === 'READY') {
+      game.markReady(username);
+      return;
+    }
+
+    // Extra arguments do not mark the player ready or expose the input to others.
+    if (/^READY[ \t]/.test(line)) {
+      sendLine(socket, 'Server: Invalid command. Use READY alone.');
+      return;
+    }
+
+    // The worker already counted Unicode code points, excluding the sender prefix.
+    if (messageTooLong) {
+      sendLine(socket, 'Server: Message too long.');
+      return;
+    }
+
+    // The session decides whether text is lobby chat or private game input.
+    // Only command routing and general input checks belong to this connection.
+    game.handleInput(username, line);
   }
 
   // Forward decoded chunks without parsing lines on the main thread. postMessage
@@ -283,6 +313,8 @@ function shutdown() {
     return;
   }
   shuttingDown = true;
+  // Disable session transitions before socket closures begin removing players.
+  game.stop();
   console.log('Server shutting down.');
   server.close();
   for (const socket of connectedSockets) {

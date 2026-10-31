@@ -14,9 +14,12 @@ The game supports one or more players. All communication goes through the server
 
 The server uses Node.js `worker_threads` to run a separate JavaScript worker for each TCP connection.
 
-- **Main thread (`server.js`):** Owns the TCP sockets and the shared username registry. It applies worker results one at a time so simultaneous registration attempts cannot claim the same username.
+- **TCP server (`server.js`):** Owns sockets, the username-to-socket registry, worker management, registration, command routing, and shutdown.
+- **Game session (`game-session.js`):** Owns lobby membership, readiness, the active-player list, game startup, cancellation, and lobby reset. Its private state lives in one session instance on the main thread. The server supplies message-delivery functions, so the session handles player names and rules without socket or worker dependencies.
 - **Client workers (`server-worker.js`):** Each worker assembles its client's incoming text into complete lines, removes surrounding spaces and tabs, and checks username syntax and message length. It sends the parsed lines and validation results to the main thread through a private message channel.
 - **Terminal client (`client.js`):** Sends newline-terminated UTF-8 input and displays the server's responses. Clients communicate through the server.
+
+Worker results are applied synchronously on the main thread. Username claims and session changes finish before the next result is handled, preventing duplicate registrations and competing game starts.
 
 The main thread decodes UTF-8 before forwarding chunks, preserving characters split across network reads. On input EOF, it waits for the worker to finish processing complete lines before closing the connection; incomplete final input is discarded. Late replies from a departing client's worker are ignored.
 
@@ -41,6 +44,21 @@ node client.js localhost 8989
 The argument syntax is `node server.js <port>` and `node client.js <host> <port>`. Use the server's hostname or IP address instead of `localhost` when connecting from another computer. Ports must contain only decimal digits and be between 1 and 65535.
 
 At the registration prompt, enter a unique username containing 3–16 ASCII letters, digits, underscores, or hyphens. Usernames are case-sensitive.
+
+Connect and register everyone who wants to play together before typing `READY`. If only one player is registered, their `READY` starts a solo game immediately. Connections still at the username prompt do not count as players.
+
+## Lobby commands
+
+| Input | What it does |
+| --- | --- |
+| `READY` | Marks you ready. Starts a game when all registered lobby players are ready. |
+| `AllUsers` | Privately lists all registered usernames, including players waiting for the next game. |
+| `quit` | Disconnects you and announces `<username> left.` to the remaining players. |
+| Other text in the lobby | Sends a chat message to registered players. |
+
+Commands are case-sensitive and take no extra arguments. Surrounding spaces and tabs are ignored. Sending `READY` again while already ready gives a private `Server: You are already ready.` response. Malformed commands also receive private errors and do not change readiness.
+
+Registration announces `<username> joined.` to registered players and privately tells the newcomer to type `READY` or `quit`. A player joining during an active game receives `Server: A game is in progress. Wait for the next game.` instead. Waiting players cannot mark themselves ready for or submit input to the active game.
 
 ## Game rules
 
@@ -161,4 +179,4 @@ node test-threading.js
 
 Both scripts start and stop their own local servers and clients. No manually started server is needed.
 
-The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown.
+The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. They also verify solo and multiplayer startup, readiness privacy, concurrent `READY` messages, waiting players, cancellation, and readiness checks after departures. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown.

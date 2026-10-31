@@ -13,6 +13,8 @@ const OBSERVE_MS = 250;
 const PROMPT = 'Server: Enter your username:';
 const INVALID_NAME = 'Server: Invalid username. Use 3–16 letters, digits, underscores, or hyphens.';
 const DUPLICATE_NAME = 'Server: Username already exists. Enter another username:';
+const LOBBY_HINT = 'Server: Type READY to play or quit to leave.';
+const WAITING_HINT = 'Server: A game is in progress. Wait for the next game.';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Track resources created by this script only, so cleanup cannot kill another server.
@@ -191,12 +193,15 @@ async function connect(label) {
 }
 
 function broadcastExpectations(lines) {
-  return new Map([...registered.values()].map((client) => [client, lines]));
+  // Give each recipient its own array so private additions cannot change others' expectations.
+  return new Map([...registered.values()].map((client) => [client, [...lines]]));
 }
 
-async function register(client, name, input = `${name}\n`) {
-  const expected = broadcastExpectations([`Server: Welcome ${name}`]);
-  expected.set(client, [`Server: Welcome ${name}`]);
+// Named options make split-input and waiting-lobby cases clear at the call site.
+// Most registrations use the default complete username and normal lobby response.
+async function register(client, name, { input = `${name}\n`, waiting = false } = {}) {
+  const expected = broadcastExpectations([`${name} joined.`]);
+  expected.set(client, [`${name} joined.`, waiting ? WAITING_HINT : LOBBY_HINT]);
   client.socket.write(input, 'utf8');
   await expectResponses(expected);
   client.username = name;
@@ -276,7 +281,7 @@ async function protocolChecks() {
     first.socket.write('A', 'utf8');
     await pause(150);
     await expectResponses(); // No complete username exists yet.
-    await register(first, 'Amy', 'my\n');
+    await register(first, 'Amy', { input: 'my\n' });
     await register(second, 'LongName_1234567'); // Exactly 16 ASCII characters.
     await register(third, 'Cara');
   });
@@ -306,20 +311,20 @@ async function protocolChecks() {
     raceA.socket.write('RaceName\n', 'utf8');
     raceB.socket.write('RaceName\n', 'utf8');
     await waitFor('both duplicate-race results', () => raceA.lines.length >= 1 && raceB.lines.length >= 1);
-    const welcome = 'Server: Welcome RaceName';
+    const welcome = 'RaceName joined.';
     const winners = [raceA, raceB].filter((client) => client.lines.includes(welcome));
     assert(winners.length === 1, 'Simultaneous name attempts must have exactly one winner');
     const winner = winners[0];
     const loser = winner === raceA ? raceB : raceA;
     const expected = broadcastExpectations([welcome]);
-    expected.set(winner, [welcome]);
+    expected.set(winner, [welcome, LOBBY_HINT]);
     expected.set(loser, [DUPLICATE_NAME]);
     await expectResponses(expected);
     winner.username = 'RaceName';
     registered.set('RaceName', winner);
     await register(loser, 'RetryName');
   });
-  await check('Isolation: unregistered client receives no welcome or chat', async () => {
+  await check('Isolation: unregistered client receives no join notices or chat', async () => {
     // All previous exact expectations also required this observer to remain silent.
     await chat(first, 'isolation-check');
     assert(unregistered.lines.length === 0 && unregistered.buffer === '', 'Unregistered client received a broadcast');
@@ -328,13 +333,13 @@ async function protocolChecks() {
     await allUsers(first);
     first.socket.write(' \tAllUsers\t \n', 'utf8');
     await expectResponses(new Map([[first, ['Server: Active users: Amy, Cara, LongName_1234567, RaceName, RetryName, amy']]]));
-    for (const command of ['AllUsers', 'Bye']) {
+    for (const command of ['AllUsers', 'quit']) {
       for (const separator of [' ', '\t']) {
         first.socket.write(`${command}${separator}extra\n`, 'utf8');
         await expectResponses(new Map([[first, [`Server: Invalid command. Use ${command} alone.`]]]));
       }
     }
-    for (const text of ['allusers', 'bye', 'AllUsersExample', 'ByeExample']) await chat(first, text);
+    for (const text of ['allusers', 'QUIT', 'AllUsersExample', 'quitExample']) await chat(first, text);
   });
   await check('Messages: 500/501 ASCII and emoji code points; continued chat', async () => {
     for (const character of ['a', '😀']) {
@@ -359,7 +364,7 @@ async function protocolChecks() {
     third.allowError = true;
     registered.delete(third.username);
     third.socket.resetAndDestroy();
-    await expectResponses(broadcastExpectations(['Server: Cara disconnected']), () => third.closed);
+    await expectResponses(broadcastExpectations(['Cara disconnected.']), () => third.closed);
     await allUsers(first);
     await chat(first, 'continued-after-disconnect');
     await register(await connect('reused departed name'), 'Cara');
@@ -369,13 +374,170 @@ async function protocolChecks() {
     unregistered.socket.end('unfinished-username');
     await expectResponses(new Map(), () => unregistered.closed);
   });
-  await check('Departure: Bye ignores trailing input and sends one goodbye', async () => {
+  await check('Departure: quit ignores trailing input and sends one departure notice', async () => {
     first.allowClose = true;
     registered.delete(first.username);
-    first.socket.write('Bye\nSHOULD_NOT_BROADCAST\n', 'utf8');
-    await expectResponses(broadcastExpectations(['Server: Goodbye Amy']), () => first.closed);
+    first.socket.write('quit\nSHOULD_NOT_BROADCAST\n', 'utf8');
+    await expectResponses(broadcastExpectations(['Amy left.']), () => first.closed);
     await allUsers(second); // Also verifies later end/close events did not notify again.
-    await chat(second, 'continued-after-Bye');
+    await chat(second, 'continued-after-quit');
+  });
+}
+
+// ----- Lobby readiness, frozen membership, and transitions after departures -----
+function gameStartedLine(names = [...registered.keys()]) {
+  return `Server: Game started. Players: ${names.sort().join(', ')}.`;
+}
+
+// Named options identify whether this READY is expected to start a game.
+async function ready(client, { startsGame = false } = {}) {
+  const lines = [`${client.username} is ready.`];
+  if (startsGame) {
+    lines.push(gameStartedLine());
+  }
+  client.socket.write('READY\n');
+  await expectResponses(broadcastExpectations(lines));
+}
+
+async function quit(client, extraLines = []) {
+  client.allowClose = true;
+  registered.delete(client.username);
+  client.socket.write('quit\n');
+  await expectResponses(broadcastExpectations([`${client.username} left.`, ...extraLines]), () => client.closed);
+}
+
+async function lobbyChecks() {
+  const initialPlayers = [...registered.values()];
+  const first = initialPlayers[0];
+  let newPlayer;
+  let observer;
+
+  await check('Lobby: malformed READY stays private and does not mark a player ready', async () => {
+    for (const separator of [' ', '\t']) {
+      first.socket.write(`READY${separator}extra\n`);
+      await expectResponses(new Map([[first, ['Server: Invalid command. Use READY alone.']]]));
+    }
+  });
+
+  await check('Lobby: waits for every player; duplicate READY is private', async () => {
+    // Leave one player unready: no start announcement may appear in these checks.
+    for (const client of initialPlayers.slice(0, -1)) {
+      await ready(client);
+    }
+    first.socket.write('READY\n');
+    await expectResponses(new Map([[first, ['Server: You are already ready.']]]));
+  });
+
+  await check('Lobby: a new registration is unready without resetting earlier readiness', async () => {
+    newPlayer = await connect('new lobby arrival');
+    await register(newPlayer, 'NewLobby');
+    await ready(initialPlayers[initialPlayers.length - 1]);
+    // The original players are now all ready, but NewLobby must still opt in.
+  });
+
+  await check('Lobby: all registered players start once; unregistered sockets do not block', async () => {
+    observer = await connect('unregistered lobby observer');
+    await ready(newPlayer, { startsGame: true });
+    assert(observer.lines.length === 0, 'Unregistered observer received game output');
+  });
+
+  let waitingA;
+  let waitingB;
+  await check('Lobby: mid-game arrivals wait and cannot join or restart the active game', async () => {
+    waitingA = await connect('waiting player A');
+    await register(waitingA, 'WaitingA', { waiting: true });
+    waitingB = await connect('waiting player B');
+    await register(waitingB, 'WaitingB', { waiting: true });
+
+    for (const client of [waitingA, waitingB]) {
+      client.socket.write('READY\n');
+      await expectResponses(new Map([[client, [WAITING_HINT]]]));
+    }
+    first.socket.write('READY\n');
+    await expectResponses(new Map([[first, ['Server: A game is already in progress.']]]));
+  });
+
+  await check('Lobby: active-game input is private; waiting players cannot send guesses', async () => {
+    first.socket.write('0472\n');
+    await expectResponses(new Map([[first, ['Server: Game in progress.']]]));
+    waitingA.socket.write('4271\n');
+    await expectResponses(new Map([[waitingA, [WAITING_HINT]]]));
+  });
+
+  await check('Lobby: departures preserve the active game while one player remains', async () => {
+    // Snapshot only the original participants; waiting players are not part of this game.
+    const participants = [...initialPlayers, newPlayer];
+    for (const client of participants.slice(0, -1)) {
+      await quit(client);
+    }
+    newPlayer.socket.write('READY\n');
+    await expectResponses(new Map([[newPlayer, ['Server: A game is already in progress.']]]));
+  });
+
+  await check('Lobby: last active departure cancels and clears waiting readiness', async () => {
+    await quit(newPlayer, ['Server: Game canceled. All players left.', LOBBY_HINT]);
+    // READY attempts made while waiting must not cause an automatic new game.
+    await ready(waitingA);
+  });
+
+  await check('Lobby: waiting players start the next game once, with only the new members', async () => {
+    // READY twice in one chunk must produce one start and then a private rejection.
+    waitingB.socket.write('READY\nREADY\n');
+    const expected = broadcastExpectations(['WaitingB is ready.', gameStartedLine()]);
+    expected.get(waitingB).push('Server: A game is already in progress.');
+    await expectResponses(expected);
+    await quit(waitingA);
+    await quit(waitingB);
+  });
+
+  let solo;
+  await check('Lobby: solo READY starts; zero registered players never start a game', async () => {
+    // The observer is still connected but unregistered, so the lobby has zero players.
+    solo = await connect('solo client');
+    await register(solo, 'Solo');
+    await ready(solo, { startsGame: true });
+    await quit(solo);
+    // Reuse the name to check that neither membership nor readiness survived departure.
+    solo = await connect('solo client again');
+    await register(solo, 'Solo');
+  });
+
+  await check('Lobby: a quit can unblock the remaining ready player', async () => {
+    const blocker = await connect('unready blocker');
+    await register(blocker, 'Blocker');
+    await ready(solo);
+    await quit(blocker, [gameStartedLine(['Solo'])]);
+    await quit(solo);
+  });
+
+  await check('Lobby: unexpected disconnect unblocks readiness with one distinct notice', async () => {
+    const survivor = await connect('ready survivor');
+    await register(survivor, 'Survivor');
+    const blocker = await connect('disconnecting blocker');
+    await register(blocker, 'Blocker');
+    await ready(survivor);
+    blocker.allowClose = true;
+    blocker.allowError = true;
+    registered.delete(blocker.username);
+    blocker.socket.resetAndDestroy();
+    await expectResponses(broadcastExpectations([
+      'Blocker disconnected.', gameStartedLine(['Survivor']),
+    ]), () => blocker.closed);
+    await quit(survivor);
+  });
+
+  await check('Lobby: concurrent READY messages start exactly one multiplayer game', async () => {
+    const alice = await connect('concurrent-ready Alice');
+    await register(alice, 'Alice');
+    const bob = await connect('concurrent-ready Bob');
+    await register(bob, 'Bob');
+    alice.socket.write('READY\n');
+    bob.socket.write('READY\n');
+    await expectResponses(broadcastExpectations([
+      'Alice is ready.', 'Bob is ready.', gameStartedLine(),
+    ]));
+    await quit(alice);
+    await quit(bob);
   });
 }
 
@@ -404,6 +566,7 @@ async function main() {
     await startupChecks();
     stage = 'Protocol setup';
     await protocolChecks();
+    await lobbyChecks();
     await terminationCheck();
   } catch (error) {
     console.error(`FAIL ${stage}: ${error.message}`);

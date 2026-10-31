@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 
 const HOST = '127.0.0.1';
 const PROMPT = 'Server: Enter your username:';
+const LOBBY_HINT = 'Server: Type READY to play or quit to leave.';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Bound asynchronous checks so a broken worker produces a failure instead of a hang.
@@ -48,7 +49,10 @@ async function startServer(t, failureMode) {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pa2-threading-'));
     t.after(() => fs.rm(directory, { recursive: true, force: true }));
     serverFile = path.join(directory, 'server.js');
-    await fs.copyFile(path.join(__dirname, 'server.js'), serverFile);
+    // Preserve the server's local module layout inside the fault-test fixture.
+    for (const name of ['server.js', 'game-session.js']) {
+      await fs.copyFile(path.join(__dirname, name), path.join(directory, name));
+    }
     const failure = failureMode === 'throw'
       ? "throw new Error('Forced worker failure for test.');"
       : 'process.exit(0);';
@@ -135,7 +139,7 @@ async function expectLine(client, line) {
 
 async function register(client, name) {
   client.socket.write(`${name}\n`);
-  await expectLine(client, `Server: Welcome ${name}`);
+  await expectLine(client, `${name} joined.`);
 }
 
 // The server logs IDs reported from inside each worker. Match by the client's port,
@@ -166,8 +170,8 @@ test('Clients have distinct worker threads, independent line buffers, and intact
   await register(bob, 'Bob');
   assert.deepEqual(alice.lines, [PROMPT]);
   alice.socket.write('ice\n');
-  await expectLine(alice, 'Server: Welcome Alice');
-  await expectLine(bob, 'Server: Welcome Alice');
+  await expectLine(alice, 'Alice joined.');
+  await expectLine(bob, 'Alice joined.');
 
   // Deliberately split an emoji inside its UTF-8 bytes, not between characters.
   const bytes = Buffer.from('split-😀\r\n');
@@ -190,18 +194,19 @@ test('Final complete lines are processed before EOF cleanup; unfinished input is
   // Registration and a final message arrive together immediately before TCP FIN.
   sender.socket.end('FinUser\nfinal-message\nunfinished');
   await waitFor('sender closure', () => sender.closed);
-  await expectLine(observer, 'Server: FinUser disconnected');
+  await expectLine(observer, 'FinUser disconnected.');
   await expectWorkerStopped(server, id);
   assert.deepEqual(observer.lines, [
     PROMPT,
-    'Server: Welcome Observer',
-    'Server: Welcome FinUser',
+    'Observer joined.',
+    LOBBY_HINT,
+    'FinUser joined.',
     'FinUser: final-message',
-    'Server: FinUser disconnected',
+    'FinUser disconnected.',
   ]);
 });
 
-test('Bye discards queued worker replies and releases the departing client thread', async (t) => {
+test('quit discards queued worker replies and releases the departing client thread', async (t) => {
   const server = await startServer(t);
   const observer = await connect(server);
   await register(observer, 'Observer');
@@ -209,13 +214,13 @@ test('Bye discards queued worker replies and releases the departing client threa
   await register(sender, 'Leaver');
   const id = workerId(server, sender);
 
-  sender.socket.write('Bye\nSHOULD_NOT_BROADCAST\n');
+  sender.socket.write('quit\nSHOULD_NOT_BROADCAST\n');
   await waitFor('polite closure', () => sender.closed);
-  await expectLine(observer, 'Server: Goodbye Leaver');
+  await expectLine(observer, 'Leaver left.');
   await expectWorkerStopped(server, id);
-  assert.equal(observer.lines.filter((line) => line === 'Server: Goodbye Leaver').length, 1);
+  assert.equal(observer.lines.filter((line) => line === 'Leaver left.').length, 1);
   assert(!observer.lines.some((line) => line.includes('SHOULD_NOT_BROADCAST')));
-  assert(!observer.lines.includes('Server: Leaver disconnected'));
+  assert(!observer.lines.includes('Leaver disconnected.'));
 });
 
 for (const failureMode of ['throw', 'exit']) {
@@ -230,9 +235,9 @@ for (const failureMode of ['throw', 'exit']) {
     // The test wrapper handles this text before the real parser sees it.
     victim.socket.write('__fail_worker__');
     await waitFor('failed worker client closure', () => victim.closed);
-    await expectLine(observer, 'Server: Victim disconnected');
+    await expectLine(observer, 'Victim disconnected.');
     await expectWorkerStopped(server, id);
-    assert.equal(observer.lines.filter((line) => line === 'Server: Victim disconnected').length, 1);
+    assert.equal(observer.lines.filter((line) => line === 'Victim disconnected.').length, 1);
     assert(!server.closed, 'A client worker failure stopped the server');
     assert.match(server.stderr, /Client worker error/);
     assert.match(server.stderr, failureMode === 'throw'
