@@ -169,10 +169,6 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
 
     const { line, messageTooLong } = message;
     console.log(`Client line (${endpoint}, thread ${workerId}): ${line}`);
-    // Ignore chat lines that are empty after removing surrounding spaces and tabs.
-    if (line === '') {
-      return;
-    }
 
     if (line === 'AllUsers') {
       // Sort registered names by ASCII order, then reply only to this client.
@@ -211,15 +207,10 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       return;
     }
 
-    // The worker already counted Unicode code points, excluding the sender prefix.
-    if (messageTooLong) {
-      sendLine(socket, 'Server: Message too long.');
-      return;
-    }
-
     // The session decides whether text is lobby chat or private game input.
-    // Only command routing and general input checks belong to this connection.
-    game.handleInput(username, line);
+    // Pass the worker's chat-length result along. The session applies it in the
+    // lobby; all invalid game guesses, including blank or long ones, use one error.
+    game.handleInput(username, line, { messageTooLong });
   }
 
   // Forward decoded chunks without parsing lines on the main thread. postMessage

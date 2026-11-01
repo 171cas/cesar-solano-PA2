@@ -6,6 +6,8 @@ const net = require('net');
 const assert = require('assert/strict');
 const { spawn } = require('child_process');
 const path = require('path');
+const os = require('os');
+const fs = require('fs/promises');
 
 const HOST = '127.0.0.1';
 const TIMEOUT_MS = 4000;
@@ -15,11 +17,14 @@ const INVALID_NAME = 'Server: Invalid username. Use 3–16 letters, digits, unde
 const DUPLICATE_NAME = 'Server: Username already exists. Enter another username:';
 const LOBBY_HINT = 'Server: Type READY to play or quit to leave.';
 const WAITING_HINT = 'Server: A game is in progress. Wait for the next game.';
+const INVALID_SUBMISSION = 'Invalid submission. Enter exactly four digits with no repeated digits.';
+const SUBMISSION_PROMPT = 'Server: Submit exactly four digits with no repeated digits.';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Track resources created by this script only, so cleanup cannot kill another server.
 const processes = new Set();
 const probes = new Set();
+const temporaryDirectories = new Set();
 const clients = [];
 const registered = new Map(); // Expected registry, maintained by successful test steps.
 let server;
@@ -29,8 +34,10 @@ let cleaningUp = false;
 let stage = 'Setup';
 
 // ----- Process ownership, timeouts, and cleanup -----
-function launch(file, args) {
-  const child = spawn(process.execPath, [path.join(__dirname, file), ...args], {
+function launch(file, args, { preload } = {}) {
+  // A preload is used only by controlled test servers, never by a manual game.
+  const nodeArgs = preload === undefined ? [] : ['--require', preload];
+  const child = spawn(process.execPath, [...nodeArgs, path.join(__dirname, file), ...args], {
     cwd: __dirname,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -103,11 +110,11 @@ async function availablePort() {
   return selected;
 }
 
-async function startServer() {
+async function startServer({ preload } = {}) {
   // Retry if another process claims the port between releasing the probe and binding.
   for (let attempt = 0; attempt < 3; attempt++) {
     const selected = await availablePort();
-    const result = launch('server.js', [String(selected)]);
+    const result = launch('server.js', [String(selected)], { preload });
     const ready = `Server listening on TCP port ${selected}.`;
     await waitFor('test server startup', () => result.stdout.includes(ready) || result.closed || result.error);
     if (result.error) throw result.error;
@@ -145,6 +152,11 @@ async function cleanup() {
         await waitFor('probe cleanup', () => closed, 1000);
       }
     } catch (error) { errors.push(error.message); }
+  }
+  // Remove test fixtures after their child processes have stopped using them.
+  for (const directory of temporaryDirectories) {
+    try { await fs.rm(directory, { recursive: true, force: true }); }
+    catch (error) { errors.push(error.message); }
   }
   if (errors.length) throw new Error(errors.join('; '));
 }
@@ -385,6 +397,10 @@ async function protocolChecks() {
 }
 
 // ----- Lobby readiness, frozen membership, and transitions after departures -----
+function roundStartLines(round = 1) {
+  return [`Round ${round} of 10`, SUBMISSION_PROMPT];
+}
+
 function gameStartedLine(names = [...registered.keys()]) {
   return `Server: Game started. Players: ${names.sort().join(', ')}.`;
 }
@@ -393,7 +409,7 @@ function gameStartedLine(names = [...registered.keys()]) {
 async function ready(client, { startsGame = false } = {}) {
   const lines = [`${client.username} is ready.`];
   if (startsGame) {
-    lines.push(gameStartedLine());
+    lines.push(gameStartedLine(), ...roundStartLines());
   }
   client.socket.write('READY\n');
   await expectResponses(broadcastExpectations(lines));
@@ -459,7 +475,7 @@ async function lobbyChecks() {
 
   await check('Lobby: active-game input is private; waiting players cannot send guesses', async () => {
     first.socket.write('0472\n');
-    await expectResponses(new Map([[first, ['Server: Game in progress.']]]));
+    await expectResponses(broadcastExpectations([`${first.username} has submitted a guess.`]));
     waitingA.socket.write('4271\n');
     await expectResponses(new Map([[waitingA, [WAITING_HINT]]]));
   });
@@ -483,7 +499,7 @@ async function lobbyChecks() {
   await check('Lobby: waiting players start the next game once, with only the new members', async () => {
     // READY twice in one chunk must produce one start and then a private rejection.
     waitingB.socket.write('READY\nREADY\n');
-    const expected = broadcastExpectations(['WaitingB is ready.', gameStartedLine()]);
+    const expected = broadcastExpectations(['WaitingB is ready.', gameStartedLine(), ...roundStartLines()]);
     expected.get(waitingB).push('Server: A game is already in progress.');
     await expectResponses(expected);
     await quit(waitingA);
@@ -506,7 +522,7 @@ async function lobbyChecks() {
     const blocker = await connect('unready blocker');
     await register(blocker, 'Blocker');
     await ready(solo);
-    await quit(blocker, [gameStartedLine(['Solo'])]);
+    await quit(blocker, [gameStartedLine(['Solo']), ...roundStartLines()]);
     await quit(solo);
   });
 
@@ -521,7 +537,7 @@ async function lobbyChecks() {
     registered.delete(blocker.username);
     blocker.socket.resetAndDestroy();
     await expectResponses(broadcastExpectations([
-      'Blocker disconnected.', gameStartedLine(['Survivor']),
+      'Blocker disconnected.', gameStartedLine(['Survivor']), ...roundStartLines(),
     ]), () => blocker.closed);
     await quit(survivor);
   });
@@ -534,10 +550,122 @@ async function lobbyChecks() {
     alice.socket.write('READY\n');
     bob.socket.write('READY\n');
     await expectResponses(broadcastExpectations([
-      'Alice is ready.', 'Bob is ready.', gameStartedLine(),
+      'Alice is ready.', 'Bob is ready.', gameStartedLine(), ...roundStartLines(),
     ]));
     await quit(alice);
     await quit(bob);
+  });
+}
+
+// ----- Complete TCP games with a repeatable secret in this child process only -----
+async function gameplayChecks() {
+  await check('Gameplay: isolated deterministic test server', async () => {
+    await closeSockets();
+    await stopProcess(server);
+    clients.length = 0;
+    registered.clear();
+
+    // Inject a fixed generator before the test child loads the session module.
+    // There is no production command or environment variable for setting a secret.
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pa2-gameplay-'));
+    temporaryDirectories.add(directory);
+    const preload = path.join(directory, 'fixed-secret.js');
+    const modulePath = path.join(__dirname, 'game-session.js');
+    await fs.writeFile(preload, `
+      const modulePath = ${JSON.stringify(modulePath)};
+      const createGameSession = require(modulePath);
+      require.cache[modulePath].exports = (options) => createGameSession({
+        ...options, makeSecret: () => '0472',
+      });
+    `);
+    await startServer({ preload });
+  });
+
+  const alice = await connect('game Alice');
+  await register(alice, 'Alice');
+  const bob = await connect('game Bob');
+  await register(bob, 'Bob');
+  await ready(alice);
+  await ready(bob, { startsGame: true });
+  let cesar = await connect('waiting Cesar');
+  await register(cesar, 'Cesar', { waiting: true });
+
+  await check('Gameplay: invalid guesses are private and do not consume a submission', async () => {
+    for (const guess of ['', '123', '1123', '12a4', '１２３４', '9'.repeat(501)]) {
+      alice.socket.write(`${guess}\n`);
+      await expectResponses(new Map([[alice, [INVALID_SUBMISSION]]]));
+    }
+  });
+
+  await check('Gameplay: fragmented correct guess is hidden and locked until all submit', async () => {
+    alice.socket.write('04');
+    await expectResponses();
+    alice.socket.write('72\n');
+    await expectResponses(broadcastExpectations(['Alice has submitted a guess.']));
+    alice.socket.write('1356\n');
+    await expectResponses(new Map([[alice, ['Server: You have already submitted a guess for this round.']]]));
+    cesar.socket.write('0472\n');
+    await expectResponses(new Map([[cesar, [WAITING_HINT]]]));
+  });
+
+  await check('Gameplay: same-round correct guesses share the win; waiting player is excluded', async () => {
+    bob.socket.write('0472\n');
+    await expectResponses(broadcastExpectations([
+      'Bob has submitted a guess.', 'Round 1 results:',
+      'Alice: 0472 -> 4 bulls, 0 cows', 'Bob: 0472 -> 4 bulls, 0 cows',
+      'Alice and Bob win!', 'Secret number: 0472', LOBBY_HINT,
+    ]));
+  });
+
+  await check('Gameplay: waiting player joins the next game after a fresh READY', async () => {
+    await ready(alice);
+    await ready(bob);
+    await ready(cesar, { startsGame: true });
+  });
+
+  await check('Gameplay: unsubmitted departure completes the remaining round with a single winner', async () => {
+    alice.socket.write('0472\n');
+    await expectResponses(broadcastExpectations(['Alice has submitted a guess.']));
+    bob.socket.write('1356\n');
+    await expectResponses(broadcastExpectations(['Bob has submitted a guess.']));
+    await quit(cesar, [
+      'Round 1 results:', 'Alice: 0472 -> 4 bulls, 0 cows', 'Bob: 1356 -> 0 bulls, 0 cows',
+      'Alice wins!', 'Bob loses.', 'Secret number: 0472', LOBBY_HINT,
+    ]);
+    cesar = await connect('Cesar rejoining');
+    await register(cesar, 'Cesar');
+    await ready(alice);
+    await ready(bob);
+    await ready(cesar, { startsGame: true });
+  });
+
+  await check('Gameplay: ten multiplayer rounds lose together and reveal the secret once', async () => {
+    for (let round = 1; round <= 10; round++) {
+      // Each client submits independently. The test expects no order between the
+      // notices, but requires every feedback row and one round outcome exactly once.
+      alice.socket.write('1356\n');
+      bob.socket.write('2589\n');
+      cesar.socket.write('9865\n');
+      const ending = round === 10
+        ? ['Everyone loses! No correct guesses after 10 rounds.', 'Secret number: 0472', LOBBY_HINT]
+        : roundStartLines(round + 1);
+      await expectResponses(broadcastExpectations([
+        'Alice has submitted a guess.', 'Bob has submitted a guess.', 'Cesar has submitted a guess.',
+        `Round ${round} results:`, 'Alice: 1356 -> 0 bulls, 0 cows',
+        'Bob: 2589 -> 0 bulls, 1 cow', 'Cesar: 9865 -> 0 bulls, 0 cows', ...ending,
+      ]));
+    }
+  });
+
+  await check('Gameplay: a solo game can win after multiplayer without restarting the server', async () => {
+    await quit(alice);
+    await quit(bob);
+    await ready(cesar, { startsGame: true });
+    cesar.socket.write('0472\n');
+    await expectResponses(broadcastExpectations([
+      'Cesar has submitted a guess.', 'Round 1 results:', 'Cesar: 0472 -> 4 bulls, 0 cows',
+      'Cesar wins!', 'Secret number: 0472', LOBBY_HINT,
+    ]));
   });
 }
 
@@ -567,6 +695,7 @@ async function main() {
     stage = 'Protocol setup';
     await protocolChecks();
     await lobbyChecks();
+    await gameplayChecks();
     await terminationCheck();
   } catch (error) {
     console.error(`FAIL ${stage}: ${error.message}`);

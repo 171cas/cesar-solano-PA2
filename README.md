@@ -15,7 +15,7 @@ The game supports one or more players. All communication goes through the server
 The server uses Node.js `worker_threads` to run a separate JavaScript worker for each TCP connection.
 
 - **TCP server (`server.js`):** Owns sockets, the username-to-socket registry, worker management, registration, command routing, and shutdown.
-- **Game session (`game-session.js`):** Owns lobby membership, readiness, the active-player list, game startup, cancellation, and lobby reset. Its private state lives in one session instance on the main thread. The server supplies message-delivery functions, so the session handles player names and rules without socket or worker dependencies.
+- **Game session (`game-session.js`):** Owns lobby membership, readiness, the active-player list, secret generation, hidden submissions, round scoring, wins and losses, cancellation, and lobby reset. Its private state lives in one session instance on the main thread. The server supplies message-delivery functions, so the session handles player names and rules without socket or worker dependencies.
 - **Client workers (`server-worker.js`):** Each worker assembles its client's incoming text into complete lines, removes surrounding spaces and tabs, and checks username syntax and message length. It sends the parsed lines and validation results to the main thread through a private message channel.
 - **Terminal client (`client.js`):** Sends newline-terminated UTF-8 input and displays the server's responses. Clients communicate through the server.
 
@@ -59,6 +59,8 @@ Connect and register everyone who wants to play together before typing `READY`. 
 Commands are case-sensitive and take no extra arguments. Surrounding spaces and tabs are ignored. Sending `READY` again while already ready gives a private `Server: You are already ready.` response. Malformed commands also receive private errors and do not change readiness.
 
 Registration announces `<username> joined.` to registered players and privately tells the newcomer to type `READY` or `quit`. A player joining during an active game receives `Server: A game is in progress. Wait for the next game.` instead. Waiting players cannot mark themselves ready for or submit input to the active game.
+
+Once the game starts, enter a four-digit guess such as `0472` and press Enter. A valid guess is locked for the current round. Wait for all active players to submit before the server reveals the guesses and feedback. After the game ends, everyone types `READY` again to play another game.
 
 ## Game rules
 
@@ -126,7 +128,9 @@ A valid guess contains exactly four digits with no repeated digits. Leading zero
 Invalid submission. Enter exactly four digits with no repeated digits.
 ```
 
-An invalid submission does not count as the player's guess and does not advance the round. The player must retry until a valid guess is accepted. Other players do not receive the error message or an invalid-submission notice.
+An invalid submission does not count as the player's guess and does not advance the round. The player must retry until a valid guess is accepted. Other players do not receive the error message or an invalid-submission notice. Blank and oversized guesses use the same error.
+
+After a valid submission, further guesses in that round receive the private response `Server: You have already submitted a guess for this round.` The accepted guess is kept.
 
 ### Bulls and cows
 
@@ -154,6 +158,7 @@ Illustrative output for a game whose secret is `0472`:
 
 ```text
 Round 3 of 10
+Server: Submit exactly four digits with no repeated digits.
 Alice has submitted a guess.
 Bob has submitted a guess.
 Cesar has submitted a guess.
@@ -164,19 +169,25 @@ Bob:   0472 -> 4 bulls, 0 cows
 Cesar: 0472 -> 4 bulls, 0 cows
 
 Bob and Cesar win!
+Alice loses.
+Secret number: 0472
+Server: Type READY to play or quit to leave.
 ```
 
 The submission notices do not reveal guesses or feedback. Results appear only after all players have submitted valid guesses.
 
 ## Verification
 
-Run the networking and threading checks:
+Run the game-session, networking, and threading checks:
 
 ```bash
+node test-game-session.js
 node test-network.js
 node test-threading.js
 ```
 
-Both scripts start and stop their own local servers and clients. No manually started server is needed.
+The game-session tests exercise rules directly without sockets. The networking and threading scripts start and stop their own local servers and clients. No manually started server is needed.
 
-The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. They also verify solo and multiplayer startup, readiness privacy, concurrent `READY` messages, waiting players, cancellation, and readiness checks after departures. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown.
+The game-session checks cover validation, scoring, hidden and locked submissions, shared wins, the round-10 boundary, fresh games, random secret format, and departures during a round.
+
+The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. They also verify solo and multiplayer startup, readiness privacy, concurrent `READY` messages, waiting players, cancellation, and readiness checks after departures. Complete TCP game checks exercise private errors, shared and individual wins, a 10-round loss, and replay without restarting. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown.
