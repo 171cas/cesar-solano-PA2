@@ -85,6 +85,7 @@ Once the game starts, enter a four-digit guess such as `0472` and press Enter. A
 
 - After successful username registration, the server announces `<username> joined.` to all registered players, including the new player. For example: `Cesar joined.`
 - Players can connect while a game is active. New players enter a waiting lobby for the next game and do not participate in or affect the current game.
+- Reconnecting with a released username creates a new player. Previous readiness and submissions are not restored; if a game is active, the new connection waits for the next one.
 
 #### Leaving and disconnecting
 
@@ -99,6 +100,7 @@ Once the game starts, enter a four-digit guess such as `0472` and press Enter. A
 - Remove the departed player and any guess they submitted for the current round. Their guess is not included in the round results and cannot win that round.
 - If every remaining active player has submitted a valid guess, reveal the round results and apply the normal win or next-round rules.
 - If only one active player remains, continue the game in solo mode with the same secret and round count.
+- A waiting player's departure does not advance or cancel the active game.
 - If all active players leave, cancel the game and return to the lobby. Any waiting players remain connected and can start a new game using `READY`.
 - There are no submission timers. A round waits for each active player to submit a valid guess or leave.
 
@@ -188,6 +190,8 @@ node test-threading.js
 
 The game-session tests exercise rules directly without sockets. The networking and threading scripts start and stop their own local servers and clients. No manually started server is needed.
 
-The game-session checks cover validation, scoring, hidden and locked submissions, shared wins, the round-10 boundary, fresh games, random secret format, and departures during a round.
+The game-session checks cover validation, scoring, hidden and locked submissions, shared wins, the round-10 boundary, fresh games, random secret format, and departures during a round. Replay checks separately verify that wins, losses, and cancellations clear readiness, submissions, the secret, and the round count before the next game.
 
-The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. They also verify solo and multiplayer startup, readiness privacy, concurrent `READY` messages, waiting players, cancellation, and readiness checks after departures. Complete TCP game checks exercise private errors, shared and individual wins, a 10-round loss, and replay without restarting. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown.
+The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. They also verify solo and multiplayer startup, readiness privacy, concurrent `READY` messages, waiting players, cancellation, and readiness checks after departures. Complete TCP game checks exercise private errors, shared and individual wins, a 10-round loss, and replay without restarting.
+
+TCP lifecycle checks verify removal of a departed correct guess, queued input after `quit`, username reuse, dropped connections unblocking rounds, waiting departures, continued solo rounds, and cancellation after the final active disconnect. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown. Worker exceptions and unexpected exits are also tested during an active round, through continued play and a subsequent game.

@@ -669,6 +669,109 @@ async function gameplayChecks() {
   });
 }
 
+// ----- Departures and replay while real client workers are handling rounds -----
+async function lifecycleChecks() {
+  // The preceding game ended with Cesar connected in the lobby. Reuse the same
+  // server throughout these scenarios to catch stale membership or round state.
+  const cesar = registered.get('Cesar');
+  assert(cesar, 'Expected Cesar in the lobby after the completed solo game');
+  let alice = await connect('lifecycle Alice');
+  await register(alice, 'Alice');
+  let bob = await connect('lifecycle Bob');
+  await register(bob, 'Bob');
+  await ready(alice);
+  await ready(bob);
+  await ready(cesar, { startsGame: true });
+
+  await check('Lifecycle: quit removes a correct pending guess and ignores queued input', async () => {
+    alice.socket.write('0472\n');
+    await expectResponses(broadcastExpectations(['Alice has submitted a guess.']));
+    bob.socket.write('1356\n');
+    await expectResponses(broadcastExpectations(['Bob has submitted a guess.']));
+    alice.allowClose = true;
+    registered.delete('Alice');
+    // These extra lines must not submit another guess or mark a departed name ready.
+    alice.socket.write('quit\n0472\nREADY\n');
+    await expectResponses(broadcastExpectations(['Alice left.']), () => alice.closed);
+    cesar.socket.write('2589\n');
+    await expectResponses(broadcastExpectations([
+      'Cesar has submitted a guess.', 'Round 1 results:',
+      'Bob: 1356 -> 0 bulls, 0 cows', 'Cesar: 2589 -> 0 bulls, 1 cow', ...roundStartLines(2),
+    ]));
+  });
+
+  await check('Lifecycle: a reused username waits instead of inheriting active membership', async () => {
+    alice = await connect('Alice with a new connection');
+    await register(alice, 'Alice', { waiting: true });
+    alice.socket.write('0472\nREADY\n');
+    await expectResponses(new Map([[alice, [WAITING_HINT, WAITING_HINT]]]));
+  });
+
+  await check('Lifecycle: an unexpected disconnect unblocks the remaining submitted round once', async () => {
+    cesar.socket.write('1356\n');
+    await expectResponses(broadcastExpectations(['Cesar has submitted a guess.']));
+    bob.allowClose = true;
+    bob.allowError = true;
+    registered.delete('Bob');
+    bob.socket.resetAndDestroy();
+    await expectResponses(broadcastExpectations([
+      'Bob disconnected.', 'Round 2 results:', 'Cesar: 1356 -> 0 bulls, 0 cows', ...roundStartLines(3),
+    ]), () => bob.closed);
+    bob = await connect('Bob with a new connection');
+    await register(bob, 'Bob', { waiting: true });
+  });
+
+  await check('Lifecycle: a waiting departure does not advance or cancel the current round', async () => {
+    await quit(alice);
+    alice = await connect('Alice waiting again');
+    await register(alice, 'Alice', { waiting: true });
+    for (const client of [alice, bob]) {
+      client.socket.write('READY\n');
+      await expectResponses(new Map([[client, [WAITING_HINT]]]));
+    }
+  });
+
+  await check('Lifecycle: a sole survivor keeps the original secret and round number', async () => {
+    cesar.socket.write('2589\n');
+    await expectResponses(broadcastExpectations([
+      'Cesar has submitted a guess.', 'Round 3 results:',
+      'Cesar: 2589 -> 0 bulls, 1 cow', ...roundStartLines(4),
+    ]));
+  });
+
+  await check('Lifecycle: final active disconnect cancels once without revealing a pending fragment', async () => {
+    // This fragment has no newline and must never become a submission, including
+    // if a new connection later reuses the same username.
+    cesar.socket.write('047');
+    await expectResponses();
+    cesar.allowClose = true;
+    cesar.allowError = true;
+    registered.delete('Cesar');
+    cesar.socket.resetAndDestroy();
+    await expectResponses(broadcastExpectations([
+      'Cesar disconnected.', 'Server: Game canceled. All players left.', LOBBY_HINT,
+    ]), () => cesar.closed);
+  });
+
+  await check('Lifecycle: canceled membership and waiting READY attempts do not carry into replay', async () => {
+    await ready(alice);
+    await ready(bob, { startsGame: true });
+    const returned = await connect('Cesar returning after cancellation');
+    await register(returned, 'Cesar', { waiting: true });
+    returned.socket.write('0472\n');
+    await expectResponses(new Map([[returned, [WAITING_HINT]]]));
+    await allUsers(returned);
+    alice.socket.write('0472\n');
+    await expectResponses(broadcastExpectations(['Alice has submitted a guess.']));
+    bob.socket.write('0472\n');
+    await expectResponses(broadcastExpectations([
+      'Bob has submitted a guess.', 'Round 1 results:',
+      'Alice: 0472 -> 4 bulls, 0 cows', 'Bob: 0472 -> 4 bulls, 0 cows',
+      'Alice and Bob win!', 'Secret number: 0472', LOBBY_HINT,
+    ]));
+  });
+}
+
 async function terminationCheck() {
   await check('Startup: client detects server termination and exits', async () => {
     await closeSockets();
@@ -696,6 +799,7 @@ async function main() {
     await protocolChecks();
     await lobbyChecks();
     await gameplayChecks();
+    await lifecycleChecks();
     await terminationCheck();
   } catch (error) {
     console.error(`FAIL ${stage}: ${error.message}`);

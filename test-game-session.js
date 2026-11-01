@@ -268,3 +268,70 @@ test('Production generation always yields four distinct ASCII digits', () => {
     assert.equal(new Set(secret).size, 4);
   }
 });
+
+// Use the same replay contract for every ending. Start from round 3 so a missing
+// round reset cannot pass merely because the previous game ended in round 1.
+for (const ending of ['win', 'loss', 'cancellation']) {
+  test(`A ${ending} clears readiness, submissions, round count, and secret before replay`, () => {
+    const trace = createTrace({ secrets: ['0472', '1357'] });
+    trace.start(['Alice', 'Bob']);
+    for (let round = 1; round <= 2; round++) {
+      trace.game.handleInput('Alice', '1356');
+      trace.game.handleInput('Bob', '2589');
+      trace.drain();
+    }
+    trace.game.addPlayer('Cesar');
+    trace.game.addPlayer('Dana');
+    trace.drain();
+    trace.game.markReady('Cesar');
+    trace.game.markReady('Dana');
+    assert.deepEqual(trace.drain(), [
+      { to: 'Cesar', text: WAITING }, { to: 'Dana', text: WAITING },
+    ]);
+
+    if (ending === 'win') {
+      trace.game.handleInput('Alice', '0472');
+      trace.game.handleInput('Bob', '1356');
+      assert(broadcasts(trace).includes('Alice wins!'));
+    } else if (ending === 'loss') {
+      for (let round = 3; round <= 10; round++) {
+        trace.game.handleInput('Alice', '1356');
+        trace.game.handleInput('Bob', '2589');
+      }
+      assert(broadcasts(trace).includes('Everyone loses! No correct guesses after 10 rounds.'));
+    } else {
+      // Leave a pending guess behind, then remove every active player. It must
+      // not be scored or inherited by the waiting players' following game.
+      trace.game.handleInput('Alice', '0472');
+      trace.game.removePlayer('Alice', true);
+      trace.game.removePlayer('Bob');
+      assert(broadcasts(trace).includes('Server: Game canceled. All players left.'));
+      assert(!broadcasts(trace).some((text) => text.startsWith('Secret number:')));
+    }
+    assert.equal(broadcasts(trace).filter((text) => text === LOBBY).length, 1);
+    trace.drain();
+
+    const remaining = ending === 'cancellation'
+      ? ['Cesar', 'Dana'] : ['Alice', 'Bob', 'Cesar', 'Dana'];
+    for (const name of remaining.slice(0, -1)) {
+      trace.game.markReady(name);
+    }
+    // Previous participants and waiting players must all make a fresh READY.
+    assert.deepEqual(broadcasts(trace), remaining.slice(0, -1).map((name) => `${name} is ready.`));
+    trace.drain();
+    const last = remaining[remaining.length - 1];
+    trace.game.markReady(last);
+    assert.deepEqual(broadcasts(trace), [
+      `${last} is ready.`, `Server: Game started. Players: ${remaining.join(', ')}.`,
+      'Round 1 of 10', PROMPT,
+    ]);
+    trace.drain();
+    for (const name of remaining) {
+      trace.game.handleInput(name, '1357');
+    }
+    assert(broadcasts(trace).includes('Round 1 results:'));
+    assert(broadcasts(trace).includes('Secret number: 1357'));
+    assert(!broadcasts(trace).some((text) => text.includes('0472')));
+    assert.equal(broadcasts(trace).filter((text) => text.endsWith(' -> 4 bulls, 0 cows')).length, remaining.length);
+  });
+}

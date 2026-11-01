@@ -49,10 +49,13 @@ async function startServer(t, failureMode) {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pa2-threading-'));
     t.after(() => fs.rm(directory, { recursive: true, force: true }));
     serverFile = path.join(directory, 'server.js');
-    // Preserve the server's local module layout inside the fault-test fixture.
-    for (const name of ['server.js', 'game-session.js']) {
-      await fs.copyFile(path.join(__dirname, name), path.join(directory, name));
-    }
+    await fs.copyFile(path.join(__dirname, 'server.js'), serverFile);
+    // Run the real session with a fixed secret in this isolated fixture. This
+    // makes round outcomes reproducible when a worker fails during an active game.
+    await fs.writeFile(path.join(directory, 'game-session.js'), `
+      const createGameSession = require(${JSON.stringify(path.join(__dirname, 'game-session.js'))});
+      module.exports = (options) => createGameSession({ ...options, makeSecret: () => '0472' });
+    `);
     const failure = failureMode === 'throw'
       ? "throw new Error('Forced worker failure for test.');"
       : 'process.exit(0);';
@@ -248,6 +251,55 @@ for (const failureMode of ['throw', 'exit']) {
     await register(replacement, 'Victim');
     observer.socket.write('still-working\n');
     await expectLine(replacement, 'Observer: still-working');
+  });
+
+  test(`Worker ${failureMode} during a round unblocks the survivor and permits replay`, async (t) => {
+    const server = await startServer(t, failureMode);
+    const observer = await connect(server);
+    await register(observer, 'Observer');
+    const victim = await connect(server);
+    await register(victim, 'Victim');
+    const id = workerId(server, victim);
+
+    observer.socket.write('READY\n');
+    await expectLine(observer, 'Observer is ready.');
+    victim.socket.write('READY\n');
+    await expectLine(observer, 'Round 1 of 10');
+    observer.socket.write('1356\n');
+    await expectLine(observer, 'Observer has submitted a guess.');
+
+    // No valid victim guess exists. Its worker failure must remove that player
+    // and score the remaining submission, using the same departure path as a drop.
+    victim.socket.write('__fail_worker__');
+    await waitFor('failed active client closure', () => victim.closed);
+    await expectWorkerStopped(server, id);
+    await expectLine(observer, 'Round 2 of 10');
+    assert.equal(observer.lines.filter((line) => line === 'Victim disconnected.').length, 1);
+    assert.equal(observer.lines.filter((line) => line === 'Round 1 results:').length, 1);
+    assert(observer.lines.includes('Observer: 1356 -> 0 bulls, 0 cows'));
+    assert(!observer.lines.some((line) => line.startsWith('Victim: ')));
+    assert(!server.closed, 'An active client worker failure stopped the server');
+
+    const replacement = await connect(server);
+    await register(replacement, 'Victim');
+    await expectLine(replacement, 'Server: A game is in progress. Wait for the next game.');
+    // The survivor keeps the original secret and round count. The replacement
+    // connection remains a spectator until that game finishes and everyone readies.
+    observer.socket.write('0472\n');
+    await expectLine(replacement, LOBBY_HINT);
+    // Different sockets can receive their data events in different orders.
+    // Wait for the observer's outcome too before inspecting that client's lines.
+    await expectLine(observer, 'Secret number: 0472');
+    assert(observer.lines.includes('Round 2 results:'));
+    assert(observer.lines.includes('Observer wins!'));
+    assert(observer.lines.includes('Secret number: 0472'));
+    observer.socket.write('READY\n');
+    await expectLine(replacement, 'Observer is ready.');
+    assert(!replacement.lines.includes('Server: Game started. Players: Observer, Victim.'));
+    replacement.socket.write('READY\n');
+    await expectLine(replacement, 'Server: Game started. Players: Observer, Victim.');
+    await expectLine(replacement, 'Round 1 of 10');
+    assert.equal(replacement.lines.filter((line) => line === 'Round 1 of 10').length, 1);
   });
 }
 
