@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+  <title>Bulls and Cows</title>
+  <!-- Only basic sizing and spacing; the controls use their native appearance. -->
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    form { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+    #port { width: 70px; }
+    #message { flex: 1; }
+    textarea { width: 100%; height: 310px; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <h1>Bulls and Cows</h1>
+  <form id="connection">
+    <label>Host <input id="host" value="localhost" required></label>
+    <label>Port <input id="port" type="number" min="1" max="65535" value="8989" required></label>
+    <button type="submit">Connect</button>
+  </form>
+  <textarea id="log" aria-label="Server messages" readonly></textarea>
+  <p>Enter your username when asked. Then send READY, a four-digit guess, or quit.</p>
+  <form id="input">
+    <label for="message">Input</label>
+    <input id="message" autocomplete="off" disabled>
+    <button id="send" type="submit" disabled>Send</button>
+  </form>
+</body>
+</html>

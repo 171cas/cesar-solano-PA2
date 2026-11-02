@@ -6,7 +6,7 @@
 
 ## Project description
 
-A terminal-based Bulls and Cows game using TCP sockets. Players try to guess the same secret four-digit number within 10 rounds. Each round uses hidden submissions: everyone submits a guess before the server reveals all guesses and their feedback. Players who guess correctly in the same round share the win.
+A Bulls and Cows game with terminal and basic desktop clients using TCP sockets. Players try to guess the same secret four-digit number within 10 rounds. Each round uses hidden submissions: everyone submits a guess before the server reveals all guesses and their feedback. Players who guess correctly in the same round share the win.
 
 The game supports one or more players. All communication goes through the server, which manages the secret number, readiness, submissions, round results, and wins or losses.
 
@@ -46,6 +46,30 @@ The argument syntax is `node server.js <port>` and `node client.js <host> <port>
 At the registration prompt, enter a unique username containing 3–16 ASCII letters, digits, underscores, or hyphens. Usernames are case-sensitive.
 
 Connect and register everyone who wants to play together before typing `READY`. If only one player is registered, their `READY` starts a solo game immediately. Connections still at the username prompt do not count as players.
+
+## Basic desktop GUI
+
+The GUI is a small window around the existing `client.js`. It has host/port fields, a Connect button, a scrolling message log, and one input with a Send button. All registration, validation, and game rules work exactly as they do in the terminal.
+
+Electron requires Node.js 22.12 or newer for installation. With nvm, install the version selected by `.nvmrc` and the single GUI dependency:
+
+```bash
+nvm install
+nvm use
+npm ci
+```
+
+Start the server with `node server.js 8989`, then run this in another terminal:
+
+```bash
+npm run gui
+```
+
+Click **Connect** and send a username at the server's prompt. Then send `READY`, guesses, or `quit` through the same input. For multiplayer, run `npm run gui` in a separate terminal for each player and register everyone before sending `READY`. Terminal and GUI players can play together.
+
+Typing `quit` sends the normal polite departure. Closing the window disconnects like Ctrl+C in the terminal. The first GUI launch downloads the Electron runtime if needed. No GUI-specific server commands or changes to the game rules are required.
+
+The three GUI files are `gui/main.js` (window and client process), `gui/preload.js` (form events and displayed output), and `gui/index.html` (basic controls). The GUI has no separate networking implementation, state snapshots, or styling files.
 
 ## Lobby commands
 

@@ -1,0 +1,17 @@
+{
+  "name": "cesar-solano-pa2",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multiplayer Bulls and Cows with TCP terminal and desktop clients",
+  "main": "gui/main.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "gui": "electron .",
+    "test": "node test-game-session.js && node test-network.js && node test-threading.js"
+  },
+  "devDependencies": {
+    "electron": "45.2.1"
+  }
+}
