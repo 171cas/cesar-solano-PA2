@@ -10,7 +10,8 @@
     form { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
     #port { width: 70px; }
     #message { flex: 1; }
-    textarea { width: 100%; height: 310px; box-sizing: border-box; }
+    /* Fixed-width characters preserve the server's aligned result columns. */
+    textarea { width: 100%; height: 310px; box-sizing: border-box; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -21,7 +22,7 @@
     <button type="submit">Connect</button>
   </form>
   <textarea id="log" aria-label="Server messages" readonly></textarea>
-  <p>Enter your username when asked. Then send READY, a four-digit guess, or quit.</p>
+  <p>Enter your username when asked. Then send READY, a four-digit guess, INFO for results, or quit.</p>
   <form id="input">
     <label for="message">Input</label>
     <input id="message" autocomplete="off" disabled>

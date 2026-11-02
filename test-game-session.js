@@ -57,6 +57,78 @@ test('A correct first submission stays hidden until every active player submits'
   ]);
 });
 
+test('INFO before any completed round stays private and never reveals a pending correct guess', () => {
+  const trace = createTrace();
+  trace.start(['Alice', 'Bob']);
+  trace.game.showInfo('Alice');
+  assert.deepEqual(trace.drain(), [{ to: 'Alice', text: 'Server: No completed rounds yet.' }]);
+  trace.game.handleInput('Alice', '0472');
+  trace.drain();
+  for (const name of ['Alice', 'Bob']) {
+    trace.game.showInfo(name);
+    assert.deepEqual(trace.drain(), [{ to: name, text: 'Server: No completed rounds yet.' }]);
+  }
+  // INFO neither uses Bob's turn nor replaces Alice's already accepted guess.
+  trace.game.handleInput('Bob', '1356');
+  assert(broadcasts(trace).includes('Alice: 0472 -> 4 bulls, 0 cows'));
+  assert(broadcasts(trace).includes('Alice wins!'));
+});
+
+test('INFO replays all completed rounds privately with aligned guesses and score counts', () => {
+  const trace = createTrace();
+  trace.start(['Bob', 'Alice']);
+  trace.game.handleInput('Bob', '2589');
+  trace.game.handleInput('Alice', '0123');
+  trace.game.handleInput('Alice', '2740');
+  trace.game.handleInput('Bob', '1356');
+  trace.game.addPlayer('Waiting');
+  trace.game.handleInput('Alice', '0472');
+  trace.drain();
+
+  const expected = [
+    'Round 1 results:',
+    'Alice: 0123 -> 1 bull,  1 cow',
+    'Bob:   2589 -> 0 bulls, 1 cow',
+    'Round 2 results:',
+    'Alice: 2740 -> 0 bulls, 4 cows',
+    'Bob:   1356 -> 0 bulls, 0 cows',
+  ];
+  // All registered viewers get the same revealed history, even after submitting.
+  for (const name of ['Alice', 'Bob', 'Waiting']) {
+    trace.game.showInfo(name);
+    assert.deepEqual(trace.drain(), expected.map((text) => ({ to: name, text })));
+  }
+  // Previous results remain available after their author leaves; the current
+  // correct submission is discarded and must never appear in INFO instead.
+  trace.game.removePlayer('Alice');
+  trace.drain();
+  trace.game.showInfo('Bob');
+  assert.deepEqual(trace.drain(), expected.map((text) => ({ to: 'Bob', text })));
+  trace.game.handleInput('Bob', '2589');
+  assert(broadcasts(trace).includes('Round 4 of 10'));
+});
+
+test('INFO handles the longest allowed username and ignores unregistered or stopped callers', () => {
+  const trace = createTrace();
+  trace.start(['ABCDEFGHIJKLMNOP', 'Bob']);
+  trace.game.handleInput('Bob', '0123');
+  trace.game.handleInput('ABCDEFGHIJKLMNOP', '2589');
+  trace.drain();
+  trace.game.showInfo('Bob');
+  const rows = trace.drain().slice(1);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].text.indexOf('2589'), 18);
+  assert.equal(rows[1].text.indexOf('0123'), 18);
+  // The arrow and both score digits also occupy matching columns.
+  assert.equal(rows[0].text.indexOf('->'), rows[1].text.indexOf('->'));
+  assert.equal(rows[0].text.indexOf('1 cow'), rows[1].text.indexOf('1 cow'));
+  assert(rows.every((row) => row.to === 'Bob'));
+  trace.game.showInfo('Unknown');
+  trace.game.stop();
+  trace.game.showInfo('Bob');
+  assert.deepEqual(trace.drain(), []);
+});
+
 test('Invalid guesses get one exact private error and can be retried in the same round', () => {
   const trace = createTrace();
   trace.start(['Alice', 'Bob']);
@@ -311,6 +383,10 @@ for (const ending of ['win', 'loss', 'cancellation']) {
     assert.equal(broadcasts(trace).filter((text) => text === LOBBY).length, 1);
     trace.drain();
 
+    // Completed-game history is unavailable in the lobby and cannot leak into replay.
+    trace.game.showInfo('Cesar');
+    assert.deepEqual(trace.drain(), [{ to: 'Cesar', text: 'Server: INFO is available during a game.' }]);
+
     const remaining = ending === 'cancellation'
       ? ['Cesar', 'Dana'] : ['Alice', 'Bob', 'Cesar', 'Dana'];
     for (const name of remaining.slice(0, -1)) {
@@ -326,6 +402,8 @@ for (const ending of ['win', 'loss', 'cancellation']) {
       'Round 1 of 10', PROMPT,
     ]);
     trace.drain();
+    trace.game.showInfo(last);
+    assert.deepEqual(trace.drain(), [{ to: last, text: 'Server: No completed rounds yet.' }]);
     for (const name of remaining) {
       trace.game.handleInput(name, '1357');
     }

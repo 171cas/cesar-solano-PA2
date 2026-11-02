@@ -585,6 +585,10 @@ async function gameplayChecks() {
   await register(alice, 'Alice');
   const bob = await connect('game Bob');
   await register(bob, 'Bob');
+  await check('INFO: lobby response is private', async () => {
+    alice.socket.write('INFO\n');
+    await expectResponses(new Map([[alice, ['Server: INFO is available during a game.']]]));
+  });
   await ready(alice);
   await ready(bob, { startsGame: true });
   let cesar = await connect('waiting Cesar');
@@ -606,6 +610,18 @@ async function gameplayChecks() {
     await expectResponses(new Map([[alice, ['Server: You have already submitted a guess for this round.']]]));
     cesar.socket.write('0472\n');
     await expectResponses(new Map([[cesar, [WAITING_HINT]]]));
+  });
+
+  await check('INFO: hidden guesses stay private and extra arguments are rejected', async () => {
+    // Alice has already submitted the correct answer; INFO still reveals nothing.
+    for (const client of [alice, bob, cesar]) {
+      client.socket.write(' \tINFO\t \n');
+      await expectResponses(new Map([[client, ['Server: No completed rounds yet.']]]));
+    }
+    for (const separator of [' ', '\t']) {
+      bob.socket.write(`INFO${separator}extra\n`);
+      await expectResponses(new Map([[bob, ['Server: Invalid command. Use INFO alone.']]]));
+    }
   });
 
   await check('Gameplay: same-round correct guesses share the win; waiting player is excluded', async () => {
@@ -654,6 +670,21 @@ async function gameplayChecks() {
         `Round ${round} results:`, 'Alice: 1356 -> 0 bulls, 0 cows',
         'Bob: 2589 -> 0 bulls, 1 cow', 'Cesar: 9865 -> 0 bulls, 0 cows', ...ending,
       ]));
+      if (round === 2) {
+        // History spans multiple rounds, keeps exact spacing over TCP, and goes
+        // only to Bob. The next loop still lets every player submit normally.
+        bob.socket.write('INFO\n');
+        await expectResponses(new Map([[bob, [
+          'Round 1 results:',
+          'Alice: 1356 -> 0 bulls, 0 cows',
+          'Bob:   2589 -> 0 bulls, 1 cow',
+          'Cesar: 9865 -> 0 bulls, 0 cows',
+          'Round 2 results:',
+          'Alice: 1356 -> 0 bulls, 0 cows',
+          'Bob:   2589 -> 0 bulls, 1 cow',
+          'Cesar: 9865 -> 0 bulls, 0 cows',
+        ]]]));
+      }
     }
   });
 

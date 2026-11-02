@@ -57,6 +57,8 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
   const activePlayers = new Set();
   // Store guesses only for the current round, keyed by the submitting player.
   const submissions = new Map();
+  // Save only revealed results. INFO must never read pending round submissions.
+  const history = [];
   let secret;
   let round = 0;
   let stopping = false;
@@ -91,6 +93,7 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
     secret = nextSecret;
     round = 1;
     submissions.clear();
+    history.length = 0;
     for (const name of players) {
       activePlayers.add(name);
     }
@@ -106,6 +109,7 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
     activePlayers.clear();
     readyPlayers.clear();
     submissions.clear();
+    history.length = 0;
     secret = undefined;
     round = 0;
     broadcast(lobbyHint);
@@ -141,15 +145,19 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
 
     broadcast(`Round ${round} results:`);
     const winners = [];
+    const results = [];
     // Sorting gives everyone the same result order, independent of submission speed.
     for (const name of Array.from(activePlayers).sort()) {
       const guess = submissions.get(name);
       const { bulls, cows } = scoreGuess(secret, guess);
+      results.push({ name, guess, bulls, cows });
       broadcast(`${name}: ${guess} -> ${bulls} bull${bulls === 1 ? '' : 's'}, ${cows} cow${cows === 1 ? '' : 's'}`);
       if (bulls === 4) {
         winners.push(name);
       }
     }
+
+    history.push({ round, results });
 
     // Check wins first: a correct submission in round 10 still wins.
     if (winners.length > 0) {
@@ -194,6 +202,40 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
     readyPlayers.add(name);
     broadcast(`${name} is ready.`);
     startIfEveryoneReady();
+  }
+
+  // Replay completed rounds privately without submitting or replacing a guess.
+  // Waiting players may also read feedback that everyone has already seen.
+  function showInfo(name) {
+    if (stopping || !players.has(name)) {
+      return;
+    }
+    if (activePlayers.size === 0) {
+      sendToPlayer(name, 'Server: INFO is available during a game.');
+      return;
+    }
+    if (history.length === 0) {
+      sendToPlayer(name, 'Server: No completed rounds yet.');
+      return;
+    }
+
+    // Use the longest historical name so guesses line up across every round,
+    // including rows belonging to players who have since left the game.
+    let nameWidth = 0;
+    for (const { results } of history) {
+      for (const result of results) {
+        nameWidth = Math.max(nameWidth, result.name.length);
+      }
+    }
+    for (const { round, results } of history) {
+      sendToPlayer(name, `Round ${round} results:`);
+      for (const { name: player, guess, bulls, cows } of results) {
+        const label = `${player}:`.padEnd(nameWidth + 2);
+        // A singular "bull" is shorter; pad after its comma to align cow counts too.
+        const feedback = `${bulls} bull${bulls === 1 ? '' : 's'},`.padEnd(9);
+        sendToPlayer(name, `${label}${guess} -> ${feedback}${cows} cow${cows === 1 ? '' : 's'}`);
+      }
+    }
   }
 
   // Remove a departed player's guess before checking the remaining submissions.
@@ -268,7 +310,7 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
   }
 
   // Expose player operations while keeping secrets, submissions, and sets private.
-  return { addPlayer, markReady, removePlayer, handleInput, stop };
+  return { addPlayer, markReady, showInfo, removePlayer, handleInput, stop };
 }
 
 // Importing the factory does not create or share a session between callers.

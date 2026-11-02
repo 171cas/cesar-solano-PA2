@@ -71,20 +71,29 @@ Typing `quit` sends the normal polite departure. Closing the window disconnects 
 
 The three GUI files are `gui/main.js` (window and client process), `gui/preload.js` (form events and displayed output), and `gui/index.html` (basic controls). The GUI has no separate networking implementation, state snapshots, or styling files.
 
-## Lobby commands
+## Commands
 
 | Input | What it does |
 | --- | --- |
 | `READY` | Marks you ready. Starts a game when all registered lobby players are ready. |
 | `AllUsers` | Privately lists all registered usernames, including players waiting for the next game. |
+| `INFO` | During a game, privately lists all completed-round guesses and results in aligned columns. Does not use your guess. |
 | `quit` | Disconnects you and announces `<username> left.` to the remaining players. |
 | Other text in the lobby | Sends a chat message to registered players. |
 
 Commands are case-sensitive and take no extra arguments. Surrounding spaces and tabs are ignored. Sending `READY` again while already ready gives a private `Server: You are already ready.` response. Malformed commands also receive private errors and do not change readiness.
 
-Registration announces `<username> joined.` to registered players and privately tells the newcomer to type `READY` or `quit`. A player joining during an active game receives `Server: A game is in progress. Wait for the next game.` instead. Waiting players cannot mark themselves ready for or submit input to the active game.
+Registration announces `<username> joined.` to registered players and privately tells the newcomer to type `READY` or `quit`. A player joining during an active game receives `Server: A game is in progress. Wait for the next game.` instead. Waiting players cannot mark themselves ready for or submit guesses to the active game, but can use `INFO` to read revealed results.
 
 Once the game starts, enter a four-digit guess such as `0472` and press Enter. A valid guess is locked for the current round. Wait for all active players to submit before the server reveals the guesses and feedback. After the game ends, everyone types `READY` again to play another game.
+
+Type `INFO` during a game to review completed rounds. Results go only to you, with guesses and scores aligned for easy reading. Current-round guesses stay hidden until everyone submits. If no round has finished, the server replies `Server: No completed rounds yet.` History is cleared when the game ends; using `INFO` in the lobby replies `Server: INFO is available during a game.`
+
+```text
+Round 1 results:
+Alice: 0123 -> 1 bull,  1 cow
+Bob:   2589 -> 0 bulls, 1 cow
+```
 
 ## Game rules
 

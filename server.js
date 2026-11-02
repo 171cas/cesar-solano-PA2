@@ -207,6 +207,16 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       return;
     }
 
+    // INFO reads revealed history without going through guess validation or locking.
+    if (line === 'INFO') {
+      game.showInfo(username);
+      return;
+    }
+    if (/^INFO[ \t]/.test(line)) {
+      sendLine(socket, 'Server: Invalid command. Use INFO alone.');
+      return;
+    }
+
     // The session decides whether text is lobby chat or private game input.
     // Pass the worker's chat-length result along. The session applies it in the
     // lobby; all invalid game guesses, including blank or long ones, use one error.
