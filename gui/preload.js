@@ -32,7 +32,12 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   inputForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    ipcRenderer.send('client:send', message.value);
+    // CLEAR affects only this window; keep the server's game and history intact.
+    if (/^[ \t]*CLEAR[ \t]*$/.test(message.value)) {
+      log.value = '';
+    } else {
+      ipcRenderer.send('client:send', message.value);
+    }
     message.value = '';
     message.focus();
   });

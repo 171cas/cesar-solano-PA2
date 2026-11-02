@@ -44,6 +44,7 @@ Enter a unique username of 3–16 ASCII letters, digits, underscores, or hyphens
 | `READY` | Mark yourself ready. Starts a game when all registered lobby players are ready. |
 | `INFO` | Privately show completed-round guesses and scores in aligned columns. Uses no turn; pending guesses stay hidden. |
 | `AllUsers` | Privately list all registered players, including those waiting for the next game. |
+| `CLEAR` | Clear the GUI message log without changing the game or its history (GUI only). |
 | `QUIT` | Disconnect and announce `<username> left.` |
 | Other text before a game starts | Chat with players in the lobby. |
 
