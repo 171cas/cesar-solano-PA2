@@ -65,9 +65,9 @@ Start the server with `node server.js 8989`, then run this in another terminal:
 npm run gui
 ```
 
-Click **Connect** and send a username at the server's prompt. Then send `READY`, guesses, or `quit` through the same input. For multiplayer, run `npm run gui` in a separate terminal for each player and register everyone before sending `READY`. Terminal and GUI players can play together.
+Click **Connect** and send a username at the server's prompt. Then send `READY`, guesses, or `QUIT` through the same input. For multiplayer, run `npm run gui` in a separate terminal for each player and register everyone before sending `READY`. Terminal and GUI players can play together.
 
-Typing `quit` sends the normal polite departure. Closing the window disconnects like Ctrl+C in the terminal. The first GUI launch downloads the Electron runtime if needed. No GUI-specific server commands or changes to the game rules are required.
+Typing `QUIT` sends the normal polite departure. Closing the window disconnects like Ctrl+C in the terminal. The first GUI launch downloads the Electron runtime if needed. No GUI-specific server commands or changes to the game rules are required.
 
 The three GUI files are `gui/main.js` (window and client process), `gui/preload.js` (form events and displayed output), and `gui/index.html` (basic controls). The GUI has no separate networking implementation, state snapshots, or styling files.
 
@@ -78,12 +78,12 @@ The three GUI files are `gui/main.js` (window and client process), `gui/preload.
 | `READY` | Marks you ready. Starts a game when all registered lobby players are ready. |
 | `AllUsers` | Privately lists all registered usernames, including players waiting for the next game. |
 | `INFO` | During a game, privately lists all completed-round guesses and results in aligned columns. Does not use your guess. |
-| `quit` | Disconnects you and announces `<username> left.` to the remaining players. |
+| `QUIT` | Disconnects you and announces `<username> left.` to the remaining players. |
 | Other text in the lobby | Sends a chat message to registered players. |
 
 Commands are case-sensitive and take no extra arguments. Surrounding spaces and tabs are ignored. Sending `READY` again while already ready gives a private `Server: You are already ready.` response. Malformed commands also receive private errors and do not change readiness.
 
-Registration announces `<username> joined.` to registered players and privately tells the newcomer to type `READY` or `quit`. A player joining during an active game receives `Server: A game is in progress. Wait for the next game.` instead. Waiting players cannot mark themselves ready for or submit guesses to the active game, but can use `INFO` to read revealed results.
+Registration announces `<username> joined.` to registered players and privately tells the newcomer to type `READY` or `QUIT`. A player joining during an active game receives `Server: A game is in progress. Wait for the next game.` instead. Waiting players cannot mark themselves ready for or submit guesses to the active game, but can use `INFO` to read revealed results.
 
 Once the game starts, enter a four-digit guess such as `0472` and press Enter. A valid guess is locked for the current round. Wait for all active players to submit before the server reveals the guesses and feedback. After the game ends, everyone types `READY` again to play another game.
 
@@ -122,8 +122,8 @@ Bob:   2589 -> 0 bulls, 1 cow
 
 #### Leaving and disconnecting
 
-- A registered player can leave at any time by typing `quit`.
-- On `quit`, the server disconnects that player and announces `<username> left.` to the remaining registered players. For example: `Cesar left.`
+- A registered player can leave at any time by typing `QUIT`.
+- On `QUIT`, the server disconnects that player and announces `<username> left.` to the remaining registered players. For example: `Cesar left.`
 - If a connection drops unexpectedly, the server announces `<username> disconnected.` instead. For example: `Cesar disconnected.`
 - Each departure is announced only once. Both types of departure use the same cleanup rules.
 - If a player leaves the lobby while no game is active, the server checks whether every remaining lobby player is ready. If so, a new game starts. A game never starts with zero players.
@@ -206,7 +206,7 @@ Cesar: 0472 -> 4 bulls, 0 cows
 Bob and Cesar win!
 Alice loses.
 Secret number: 0472
-Server: Type READY to play or quit to leave.
+Server: Type READY to play or QUIT to leave.
 ```
 
 The submission notices do not reveal guesses or feedback. Results appear only after all players have submitted valid guesses.
@@ -227,4 +227,4 @@ The game-session checks cover validation, scoring, hidden and locked submissions
 
 The networking checks cover argument errors, registration, duplicate usernames, concurrent messaging, line buffering, message limits, commands, and departures. They also verify solo and multiplayer startup, readiness privacy, concurrent `READY` messages, waiting players, cancellation, and readiness checks after departures. Complete TCP game checks exercise private errors, shared and individual wins, a 10-round loss, and replay without restarting.
 
-TCP lifecycle checks verify removal of a departed correct guess, queued input after `quit`, username reuse, dropped connections unblocking rounds, waiting departures, continued solo rounds, and cancellation after the final active disconnect. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown. Worker exceptions and unexpected exits are also tested during an active round, through continued play and a subsequent game.
+TCP lifecycle checks verify removal of a departed correct guess, queued input after `QUIT`, username reuse, dropped connections unblocking rounds, waiting departures, continued solo rounds, and cancellation after the final active disconnect. The threading checks verify distinct worker IDs, independent client buffers, split UTF-8 input, complete lines arriving before EOF, worker cleanup, worker failure isolation, and server shutdown. Worker exceptions and unexpected exits are also tested during an active round, through continued play and a subsequent game.

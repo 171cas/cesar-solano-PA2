@@ -96,7 +96,7 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
   // socket or worker events can report the same departure, but it is handled once.
   let closing = false;
 
-  // Remove this client and stop its worker exactly once; polite means it sent quit.
+  // Remove this client and stop its worker exactly once; polite means it sent QUIT.
   function cleanup(polite = false) {
     if (closing) {
       return;
@@ -184,15 +184,15 @@ const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       return;
     }
 
-    if (line === 'quit') {
+    if (line === 'QUIT') {
       cleanup(true);
       socket.end();
       // Later worker replies, including other lines in this chunk, are ignored.
       return;
     }
 
-    if (/^quit[ \t]/.test(line)) {
-      sendLine(socket, 'Server: Invalid command. Use quit alone.');
+    if (/^QUIT[ \t]/.test(line)) {
+      sendLine(socket, 'Server: Invalid command. Use QUIT alone.');
       return;
     }
 

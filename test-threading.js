@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 
 const HOST = '127.0.0.1';
 const PROMPT = 'Server: Enter your username:';
-const LOBBY_HINT = 'Server: Type READY to play or quit to leave.';
+const LOBBY_HINT = 'Server: Type READY to play or QUIT to leave.';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Bound asynchronous checks so a broken worker produces a failure instead of a hang.
@@ -209,7 +209,7 @@ test('Final complete lines are processed before EOF cleanup; unfinished input is
   ]);
 });
 
-test('quit discards queued worker replies and releases the departing client thread', async (t) => {
+test('QUIT discards queued worker replies and releases the departing client thread', async (t) => {
   const server = await startServer(t);
   const observer = await connect(server);
   await register(observer, 'Observer');
@@ -217,7 +217,7 @@ test('quit discards queued worker replies and releases the departing client thre
   await register(sender, 'Leaver');
   const id = workerId(server, sender);
 
-  sender.socket.write('quit\nSHOULD_NOT_BROADCAST\n');
+  sender.socket.write('QUIT\nSHOULD_NOT_BROADCAST\n');
   await waitFor('polite closure', () => sender.closed);
   await expectLine(observer, 'Leaver left.');
   await expectWorkerStopped(server, id);

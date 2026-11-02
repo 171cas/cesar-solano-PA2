@@ -58,7 +58,7 @@ app.whenReady().then(() => {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.loadFile(path.join(__dirname, 'index.html'));
-  // Closing the app acts like Ctrl+C in the terminal; typing quit remains a polite exit.
+  // Closing the app acts like Ctrl+C in the terminal; typing QUIT remains a polite exit.
   app.on('before-quit', () => client?.kill('SIGINT'));
 });
 

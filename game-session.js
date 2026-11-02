@@ -63,7 +63,7 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
   let round = 0;
   let stopping = false;
 
-  const lobbyHint = 'Server: Type READY to play or quit to leave.';
+  const lobbyHint = 'Server: Type READY to play or QUIT to leave.';
   const waitingHint = 'Server: A game is in progress. Wait for the next game.';
 
   // The same prompt is used at startup and after each unsuccessful round.
@@ -239,7 +239,7 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
   }
 
   // Remove a departed player's guess before checking the remaining submissions.
-  // A removed correct guess cannot win. polite means the player explicitly quit.
+  // A removed correct guess cannot win. polite means the player sent QUIT.
   function removePlayer(name, polite = false) {
     if (!players.delete(name)) {
       return;

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const createGameSession = require('./game-session');
 
 const ERROR = 'Invalid submission. Enter exactly four digits with no repeated digits.';
-const LOBBY = 'Server: Type READY to play or quit to leave.';
+const LOBBY = 'Server: Type READY to play or QUIT to leave.';
 const WAITING = 'Server: A game is in progress. Wait for the next game.';
 const PROMPT = 'Server: Submit exactly four digits with no repeated digits.';
 

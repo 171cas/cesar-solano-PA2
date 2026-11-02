@@ -15,7 +15,7 @@ const OBSERVE_MS = 250;
 const PROMPT = 'Server: Enter your username:';
 const INVALID_NAME = 'Server: Invalid username. Use 3–16 letters, digits, underscores, or hyphens.';
 const DUPLICATE_NAME = 'Server: Username already exists. Enter another username:';
-const LOBBY_HINT = 'Server: Type READY to play or quit to leave.';
+const LOBBY_HINT = 'Server: Type READY to play or QUIT to leave.';
 const WAITING_HINT = 'Server: A game is in progress. Wait for the next game.';
 const INVALID_SUBMISSION = 'Invalid submission. Enter exactly four digits with no repeated digits.';
 const SUBMISSION_PROMPT = 'Server: Submit exactly four digits with no repeated digits.';
@@ -345,13 +345,13 @@ async function protocolChecks() {
     await allUsers(first);
     first.socket.write(' \tAllUsers\t \n', 'utf8');
     await expectResponses(new Map([[first, ['Server: Active users: Amy, Cara, LongName_1234567, RaceName, RetryName, amy']]]));
-    for (const command of ['AllUsers', 'quit']) {
+    for (const command of ['AllUsers', 'QUIT']) {
       for (const separator of [' ', '\t']) {
         first.socket.write(`${command}${separator}extra\n`, 'utf8');
         await expectResponses(new Map([[first, [`Server: Invalid command. Use ${command} alone.`]]]));
       }
     }
-    for (const text of ['allusers', 'QUIT', 'AllUsersExample', 'quitExample']) await chat(first, text);
+    for (const text of ['allusers', 'quit', 'AllUsersExample', 'QUITExample']) await chat(first, text);
   });
   await check('Messages: 500/501 ASCII and emoji code points; continued chat', async () => {
     for (const character of ['a', '😀']) {
@@ -386,10 +386,10 @@ async function protocolChecks() {
     unregistered.socket.end('unfinished-username');
     await expectResponses(new Map(), () => unregistered.closed);
   });
-  await check('Departure: quit ignores trailing input and sends one departure notice', async () => {
+  await check('Departure: QUIT ignores trailing input and sends one departure notice', async () => {
     first.allowClose = true;
     registered.delete(first.username);
-    first.socket.write('quit\nSHOULD_NOT_BROADCAST\n', 'utf8');
+    first.socket.write('QUIT\nSHOULD_NOT_BROADCAST\n', 'utf8');
     await expectResponses(broadcastExpectations(['Amy left.']), () => first.closed);
     await allUsers(second); // Also verifies later end/close events did not notify again.
     await chat(second, 'continued-after-quit');
@@ -418,7 +418,7 @@ async function ready(client, { startsGame = false } = {}) {
 async function quit(client, extraLines = []) {
   client.allowClose = true;
   registered.delete(client.username);
-  client.socket.write('quit\n');
+  client.socket.write('QUIT\n');
   await expectResponses(broadcastExpectations([`${client.username} left.`, ...extraLines]), () => client.closed);
 }
 
@@ -518,7 +518,7 @@ async function lobbyChecks() {
     await register(solo, 'Solo');
   });
 
-  await check('Lobby: a quit can unblock the remaining ready player', async () => {
+  await check('Lobby: QUIT can unblock the remaining ready player', async () => {
     const blocker = await connect('unready blocker');
     await register(blocker, 'Blocker');
     await ready(solo);
@@ -714,7 +714,7 @@ async function lifecycleChecks() {
   await ready(bob);
   await ready(cesar, { startsGame: true });
 
-  await check('Lifecycle: quit removes a correct pending guess and ignores queued input', async () => {
+  await check('Lifecycle: QUIT removes a correct pending guess and ignores queued input', async () => {
     alice.socket.write('0472\n');
     await expectResponses(broadcastExpectations(['Alice has submitted a guess.']));
     bob.socket.write('1356\n');
@@ -722,7 +722,7 @@ async function lifecycleChecks() {
     alice.allowClose = true;
     registered.delete('Alice');
     // These extra lines must not submit another guess or mark a departed name ready.
-    alice.socket.write('quit\n0472\nREADY\n');
+    alice.socket.write('QUIT\n0472\nREADY\n');
     await expectResponses(broadcastExpectations(['Alice left.']), () => alice.closed);
     cesar.socket.write('2589\n');
     await expectResponses(broadcastExpectations([
