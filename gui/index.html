@@ -22,7 +22,13 @@
     <button type="submit">Connect</button>
   </form>
   <textarea id="log" aria-label="Server messages" readonly></textarea>
-  <p>Enter your username when asked. Then send READY, a four-digit guess, INFO for results, or QUIT.</p>
+  <p>Enter your username when prompted. Before a game starts, type a message to chat with other players in the lobby.</p>
+  <h2>Commands</h2>
+  <ul>
+    <li><strong>READY:</strong> Mark yourself ready. The game starts when everyone is ready, or immediately if you are the only player in the lobby.</li>
+    <li><strong>INFO:</strong> Privately review all completed-round guesses and results from the current game.</li>
+    <li><strong>QUIT:</strong> Disconnect from the server.</li>
+  </ul>
   <form id="input">
     <label for="message">Input</label>
     <input id="message" autocomplete="off" disabled>
