@@ -11,7 +11,8 @@
     #port { width: 70px; }
     #message { flex: 1; }
     /* Fixed-width characters preserve the server's aligned result columns. */
-    textarea { width: 100%; height: 290px; box-sizing: border-box; font-family: monospace; }
+    textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
+    #log { height: 290px; }
   </style>
 </head>
 <body>
@@ -35,5 +36,10 @@
     <input id="message" autocomplete="off" disabled>
     <button id="send" type="submit" disabled>Send</button>
   </form>
+  <!-- Keep notes outside the send form so typing here never submits a message. -->
+  <p>
+    <label for="notes">Personal notes</label><br>
+    <textarea id="notes" rows="3" placeholder="Write your notes here. Only visible in this window."></textarea>
+  </p>
 </body>
 </html>
