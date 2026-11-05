@@ -16,7 +16,7 @@ nvm use
 npm ci
 ```
 
-These are initial setup steps. Repeat `npm ci` when dependencies change. If a compatible Node.js version is already installed, you can skip the nvm commands.
+`nvm install` and `npm ci` are initial setup steps. Repeat `npm ci` when dependencies change, and run `nvm use` in each new terminal. You can skip the nvm commands if a compatible Node.js version is already active.
 
 ## Running
 
@@ -38,9 +38,10 @@ Use the server's hostname or IP instead of `localhost` when connecting from anot
 
 ### Desktop GUI
 
-After installation, start each GUI client in a separate terminal:
+After installation, start each GUI client in a separate terminal. With nvm, select the project's Node.js version in that terminal before launching the GUI:
 
 ```bash
+nvm use
 npm run gui
 ```
 
