@@ -56,5 +56,5 @@ parentPort.on('message', (message) => {
 });
 
 // Report the actual executing thread ID after the input handler has been installed.
-// The main thread logs it so separate client workers can be verified during testing.
+// The main thread includes it in this connection's log messages.
 parentPort.postMessage({ type: 'ready', threadId });

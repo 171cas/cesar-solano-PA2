@@ -48,8 +48,7 @@ function formatNames(names) {
 
 // Create one session on the main thread; workers cannot change its private state.
 // Message functions deliver the output without introducing socket dependencies.
-// Tests can supply makeSecret for repeatable games; the server uses random secrets.
-function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecret }) {
+function createGameSession({ sendToPlayer, broadcast }) {
   // Include every registered player, including those waiting for the next game.
   const players = new Set();
   const readyPlayers = new Set();
@@ -84,13 +83,8 @@ function createGameSession({ sendToPlayer, broadcast, makeSecret = generateSecre
       }
     }
 
-    // Generate once per game. Validate supplied generators too so an invalid test
-    // secret cannot silently create a game whose guesses can never match it.
-    const nextSecret = makeSecret();
-    if (!isValidGuess(nextSecret)) {
-      throw new Error('Secret generator must return four distinct ASCII digits.');
-    }
-    secret = nextSecret;
+    // Generate one shared secret per game and keep it unchanged across rounds.
+    secret = generateSecret();
     round = 1;
     submissions.clear();
     history.length = 0;

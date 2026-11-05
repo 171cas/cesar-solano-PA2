@@ -82,11 +82,3 @@ All client communication goes through the server. Each TCP connection gets a rea
 | `game-session.js`  | Lobby, readiness, hidden rounds, scoring, history, outcomes, and replay.     |
 | `client.js`        | Terminal input and TCP communication.                                        |
 | `gui/`             | A minimal Electron window that reuses `client.js`.                           |
-
-## Tests
-
-```bash
-npm test
-```
-
-Runs game-session, TCP, and threading checks. Tests start and stop their own servers.
