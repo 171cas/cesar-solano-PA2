@@ -4,15 +4,29 @@
 
 A TCP Bulls and Cows game for one or more players, with terminal and basic desktop clients. Players compete to guess the same secret number within 10 rounds.
 
+The server and terminal client use only built-in Node.js modules and require no additional packages. The desktop GUI requires Electron.
+
+## Installation
+
+For the GUI, use Node.js 22.12+ and install Electron from the project folder. With nvm installed, run:
+
+```bash
+nvm install
+nvm use
+npm ci
+```
+
+These are initial setup steps. Repeat `npm ci` when dependencies change. If a compatible Node.js version is already installed, you can skip the nvm commands.
+
 ## Running
 
-The server and terminal client require Node.js and use only built-in modules; no package installation is needed.
-
-Start the server:
+Start the server and keep this terminal open:
 
 ```bash
 node server.js 8989
 ```
+
+### Terminal clients
 
 In a separate terminal for each player:
 
@@ -24,12 +38,9 @@ Use the server's hostname or IP instead of `localhost` when connecting from anot
 
 ### Desktop GUI
 
-The GUI requires Node.js 22.12+ and Electron. With nvm, select the version in `.nvmrc` and install the dependency:
+After installation, start each GUI client in a separate terminal:
 
 ```bash
-nvm install
-nvm use
-npm ci
 npm run gui
 ```
 
@@ -39,14 +50,14 @@ Keep the server running separately. Enter its host and port, click **Connect**, 
 
 Enter a unique username of 3–16 ASCII letters, digits, underscores, or hyphens. Register everyone before sending `READY`: if you are the only registered player, it starts a solo game immediately.
 
-| Input | Action |
-| --- | --- |
-| `READY` | Mark yourself ready. Starts a game when all registered lobby players are ready. |
-| `INFO` | Privately show completed-round guesses and scores in aligned columns. Uses no turn; pending guesses stay hidden. |
-| `AllUsers` | Privately list all registered players, including those waiting for the next game. |
-| `CLEAR` | Clear the GUI message log without changing the game or its history (GUI only). |
-| `QUIT` | Disconnect and announce `<username> left.` |
-| Other text before a game starts | Chat with players in the lobby. |
+| Input                           | Action                                                                                                           |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `READY`                         | Mark yourself ready. Starts a game when all registered lobby players are ready.                                  |
+| `INFO`                          | Privately show completed-round guesses and scores in aligned columns. Uses no turn; pending guesses stay hidden. |
+| `AllUsers`                      | Privately list all registered players, including those waiting for the next game.                                |
+| `CLEAR`                         | Clear the GUI message log without changing the game or its history (GUI only).                                   |
+| `QUIT`                          | Disconnect and announce `<username> left.`                                                                       |
+| Other text before a game starts | Chat with players in the lobby.                                                                                  |
 
 Usernames and commands are case-sensitive. Commands take no arguments. Unexpected disconnects announce `<username> disconnected.`
 
@@ -64,13 +75,13 @@ Usernames and commands are case-sensitive. Commands take no arguments. Unexpecte
 
 All client communication goes through the server. Each TCP connection gets a real worker thread to parse and validate input; the main thread owns sockets and shared game state.
 
-| File | Responsibility |
-| --- | --- |
-| `server.js` | Connections, registration, command routing, worker management, and shutdown. |
-| `server-worker.js` | Per-client line buffering and input syntax checks. |
-| `game-session.js` | Lobby, readiness, hidden rounds, scoring, history, outcomes, and replay. |
-| `client.js` | Terminal input and TCP communication. |
-| `gui/` | A minimal Electron window that reuses `client.js`. |
+| File               | Responsibility                                                               |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `server.js`        | Connections, registration, command routing, worker management, and shutdown. |
+| `server-worker.js` | Per-client line buffering and input syntax checks.                           |
+| `game-session.js`  | Lobby, readiness, hidden rounds, scoring, history, outcomes, and replay.     |
+| `client.js`        | Terminal input and TCP communication.                                        |
+| `gui/`             | A minimal Electron window that reuses `client.js`.                           |
 
 ## Tests
 
